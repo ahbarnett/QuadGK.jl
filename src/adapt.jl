@@ -27,10 +27,11 @@ function do_quadgk(f::F, s::NTuple{N,T}, n, atol, rtol, maxevals, nrm, segbuf) w
     atol_ = something(atol, zero(E))
     rtol_ = something(rtol, iszero(atol_) ? sqrt(eps(one(eltype(x)))) : zero(eltype(x)))
 
-    # optimize common case of no subdivision
+    #= optimize common case of no subdivision
     if E ≤ atol_ || E ≤ rtol_ * nrm(I) || numevals ≥ maxevals
         return (I, E) # fast return when no subdivisions required
     end
+    =#
 
     segheap = segbuf === nothing ? collect(segs) : (resize!(segbuf, N-1) .= segs)
     heapify!(segheap, Reverse)
@@ -81,7 +82,7 @@ function adapt(f::F, segs::Vector{T}, I, E, numevals, x,w,gw,n, atol, rtol, maxe
             E += segs[i].E
         end
     end
-    return (I, E)
+    return (I, E, numevals, segs)
 end
 
 realone(x) = false
