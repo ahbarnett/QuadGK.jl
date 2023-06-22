@@ -64,11 +64,12 @@ function find_near_poles(f, s::Segment; rho=1.0, p=8)
     analytic---hence the brittleness to nearby zeros.  We use Boyd's
     conversion from `g` values on Chebyshev nodes on the segment to a
     Laurent (and then Taylor) series for `g` in an annular
-    neighborhood of the unit circle, followed by rootfinding. For a segment from `a` to `b`,
-    the map from `z` (input arg) to `t` (coord scaled to the unit interval) is
-    `t = (z - (b+a)/2) / ((b-a)/2)`.
-    Then the Joukowsky map `t = (ξ+1/ξ)/2` defines the variable `ξ` in which
-    roots are found in an annular neighborhood of the unit circle.
+    neighborhood of the unit circle, followed by rootfinding. For a
+    segment from `a` to `b`, the map from `z` (input arg) to `t`
+    (coord scaled to the unit interval) is `t = (z - (b+a)/2) /
+    ((b-a)/2)`.  Then the Joukowsky map `t = (ξ+1/ξ)/2` defines the
+    variable `ξ` in which roots are found in an annular neighborhood
+    of the unit circle.
 
     `rho > 1.0` sets the Bernstein ellipse parameter in which to keep
     poles, so that the ellipse for the standard segment `[-1,1]` has
@@ -174,7 +175,7 @@ function adapt(f::F, segs::Vector{T}, I, E, numevals, x,w,gw,n, atol, rtol, maxe
             E += segs[i].E
         end
     end
-    return (I, E, segs) # answer, err estim, pluts segs info (breaks some tests)
+    return (I, E, segs) # answer, err estim, pluts segs info
 end
 
 realone(x) = false

@@ -6,6 +6,8 @@ Documentation:
 [![](https://img.shields.io/badge/docs-stable-blue.svg)](https://JuliaMath.github.io/QuadGK.jl/stable)
 [![](https://img.shields.io/badge/docs-latest-blue.svg)](https://JuliaMath.github.io/QuadGK.jl/dev)
 
+[Experimental meromorphic variant by AHB. Includes quadgk_segs which returns vector of Segments used]
+
 This package provides support for one-dimensional numerical integration in Julia using adaptive
 Gauss-Kronrod quadrature.
 The code was originally part of Base Julia.  It supports integration of arbitrary numeric types,

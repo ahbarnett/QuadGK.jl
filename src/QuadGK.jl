@@ -63,6 +63,7 @@ include("weightedgauss.jl")
 
 # opts struct to control meromorphic adaptivity... (AHB)
 struct Meroopts
+    meth::Int64
     rho::Float64
     p::Int64
 end
