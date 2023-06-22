@@ -3,7 +3,7 @@
 # integration with the order-n Kronrod rule and weights of type Tw,
 # with absolute tolerance atol and relative tolerance rtol,
 # with maxevals an approximate maximum number of f evaluations.
-function do_quadgk(f::F, s::NTuple{N,T}, n, atol, rtol, maxevals, nrm, segbuf, mero) where {T,N,F}
+function do_quadgk_segsnocount(f::F, s::NTuple{N,T}, n, atol, rtol, maxevals, nrm, segbuf, mero) where {T,N,F}
     x,w,gw = cachedrule(T,n)
     # note N is num endpoints given by user in s, a plain vector of numbers.
     
@@ -33,16 +33,20 @@ function do_quadgk(f::F, s::NTuple{N,T}, n, atol, rtol, maxevals, nrm, segbuf, m
     
     # optimize common case of no subdivision
     if E ≤ atol_ || E ≤ rtol_ * nrm(I) || numevals ≥ maxevals
-        #return (I, E)   # fast return when no subdivisions required
+        # fast return when no subdivisions required
         return (I, E, segs)   # add extra segs info (same as user s input)
     end
 
     # why is collect() needed here?
     segheap = (segbuf === nothing) ? collect(segs) : (resize!(segbuf, N-1) .= segs)
     heapify!(segheap, Reverse)
-    # single call to adaptive refinement...
+    # single call to adaptive refinement... (returns I,E,segs)
     return adapt(f, segheap, I, E, numevals, x,w,gw,n, atol_, rtol_, maxevals, nrm, mero)
 end
+
+# Keep just SGJ's original return args (I,E)
+do_quadgk(args...) = do_quadgk_segsnocount(args...)[1:2]
+
 
 function find_near_poles(f, s::Segment; rho=1.0, p=8)
     """
@@ -108,7 +112,8 @@ function adapt(f::F, segs::Vector{T}, I, E, numevals, x,w,gw,n, atol, rtol, maxe
     # Pop the biggest-error segment and subdivide (h-adaptation)
     # until convergence is achieved or maxevals is exceeded.
     #
-    # AHB mero version, also w/ extra doc comments.
+    # AHB mero version, also w/ extra doc comments, and returns (I,E, segs)
+    # not merely (I,E).
     # Here E is the total error, and I the total integrand. Hence they get updated.
     # There is no recursion, just continuing to pop worst el in heap, until *tot* E hits tol.
     # Note if rtol=0, it has no effect.  Logic is: stop if either criterion on E passes.
@@ -169,8 +174,7 @@ function adapt(f::F, segs::Vector{T}, I, E, numevals, x,w,gw,n, atol, rtol, maxe
             E += segs[i].E
         end
     end
-    #return (I, E)
-    return (I, E, segs)           # the extra segs info (breaks some tests)
+    return (I, E, segs) # answer, err estim, pluts segs info (breaks some tests)
 end
 
 realone(x) = false
@@ -307,12 +311,12 @@ Passing in mero a QuadGK.Meroopts struct controls the meromorphic variant.
 quadgk(f, segs...; kws...) =
     quadgk(f, promote(segs...)...; kws...)
 
-# This is the main entry point.
+
+# This appears to be the main entry point.
 # Confusing that segs is plain list of reals, each as separate arg. not Segments as above
 function quadgk(f, segs::T...;
                 atol=nothing, rtol=nothing, maxevals=10^7, order=7, norm=norm, segbuf=nothing, mero=nothing) where {T}
     # AHB added mero arg
-    #println(segs)
 
     # This is tricky: despite "do", it does *not* loop over elements of segs!
     # It's a way to pass inline quadr func to handle_infinities, wrapping in its kws.
@@ -327,6 +331,15 @@ function quadgk(f, segs::T...;
         # defines inline func of (f,s,_) which calls do_quadgk(f,s,...) with default kws
     end
     # note "norm" is the func from LinearAlg
+end
+
+function quadgk_segsnocount(f, segs::T...;
+                     atol=nothing, rtol=nothing, maxevals=10^7, order=7, norm=norm, segbuf=nothing, mero=nothing) where {T}
+    # AHB's version of quadgk which returns (I, E, segs) for diagnostic purposes
+    # also has mero arg.
+    handle_infinities(f, segs) do f, s, _
+        do_quadgk_segsnocount(f, s, order, atol, rtol, maxevals, norm, segbuf, mero)
+    end
 end
 
 """
@@ -395,6 +408,24 @@ function quadgk_count(f, args...; kws...)
     end
     return (i..., count)
 end
+
+"""
+quadgk_segs diagnostic variant of quadgk that returns
+`(I,E,segs,count)` where `segs` is a list of `Segment` objects,
+in particular containing the interval (a,b) for each segment,
+and `count` gives the number of function evaluations.
+
+See ['quadgk'](@ref)
+"""
+function quadgk_segs(f, args...; kws...)
+    count = 0
+    i = quadgk_segsnocount(args...; kws...) do x
+        count += 1
+        f(x)
+    end
+    return (i..., count)
+end
+
 
 """
     quadgk_print([io], f, args...; kws...)

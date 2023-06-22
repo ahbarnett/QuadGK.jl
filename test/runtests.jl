@@ -150,3 +150,11 @@ end
     @test sprint(io -> quadgk_print(io, x -> x^2, 0, 1, order=2), context=:compact=>true) ==
         "f(0.5) = 0.25\nf(0.211325) = 0.0446582\nf(0.788675) = 0.622008\nf(0.03709) = 0.00137566\nf(0.96291) = 0.927196\n"
 end
+
+@testset "quadgk_segs (AHB)" begin
+    I, E, segs, count = quadgk_segs(x->cos(200x), 0,1)
+    @test length(segs) == 64
+    @test count == 1905
+    # enough to test interface for now
+    # Note quadgk_segs does not have pre-alloc segbuf or ! variant...
+end

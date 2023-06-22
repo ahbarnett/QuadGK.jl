@@ -26,7 +26,7 @@ and returns the approximate `integral = 0.746824132812427` and error estimate
 module QuadGK
 
 export quadgk, quadgk!, gauss, kronrod, alloc_segbuf, quadgk_count, quadgk_print
-export Meroopts
+export quadgk_segs, Meroopts
 
 using DataStructures, LinearAlgebra
 
