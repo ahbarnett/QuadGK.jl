@@ -2,6 +2,8 @@
 # originally written and contributed to Julia by Steven G. Johnson, 2013.
 #
 # This file was formerly a part of Julia. License is MIT: http://julialang.org/license
+#
+# Meromorphic variant by Alex Barnett 2023.
 
 """
 The `QuadGK` module implements 1d numerical integration by an adaptive Gauss–Kronrod algorithm.
@@ -24,8 +26,14 @@ and returns the approximate `integral = 0.746824132812427` and error estimate
 module QuadGK
 
 export quadgk, quadgk!, gauss, kronrod, alloc_segbuf, quadgk_count, quadgk_print
+export Meroopts
 
 using DataStructures, LinearAlgebra
+
+using PolynomialRoots     # low-order faster roots
+using FFTW
+
+# this brings Reverse into the namespace, for heap to use...
 import Base.Order.Reverse
 
 # an in-place integrand function f!(result, x) and
@@ -52,5 +60,11 @@ include("gausskronrod.jl")
 include("evalrule.jl")
 include("adapt.jl")
 include("weightedgauss.jl")
+
+# opts struct to control meromorphic adaptivity... (AHB)
+struct Meroopts
+    rho::Float64
+    p::Int64
+end
 
 end # module QuadGK

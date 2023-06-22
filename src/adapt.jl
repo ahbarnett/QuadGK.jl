@@ -3,10 +3,13 @@
 # integration with the order-n Kronrod rule and weights of type Tw,
 # with absolute tolerance atol and relative tolerance rtol,
 # with maxevals an approximate maximum number of f evaluations.
-function do_quadgk(f::F, s::NTuple{N,T}, n, atol, rtol, maxevals, nrm, segbuf) where {T,N,F}
+function do_quadgk(f::F, s::NTuple{N,T}, n, atol, rtol, maxevals, nrm, segbuf, mero) where {T,N,F}
     x,w,gw = cachedrule(T,n)
-
+    # note N is num endpoints given by user in s, a plain vector of numbers.
+    
     @assert N ≥ 2
+    # This does non-adaptive integral on each interval and returns segs
+    # I don't get Val here... fancy way of iterating N_1 times over the inline func i->...
     segs = ntuple(i -> evalrule(f, s[i],s[i+1], x,w,gw, nrm), Val{N-1}())
     if f isa InplaceIntegrand
         I = f.I .= segs[1].I
@@ -14,39 +17,122 @@ function do_quadgk(f::F, s::NTuple{N,T}, n, atol, rtol, maxevals, nrm, segbuf) w
             I .+= segs[i].I
         end
     else
-        I = sum(s -> s.I, segs)
+        I = sum(s -> s.I, segs)       # iterator, this appears to sum using just given segs
     end
-    E = sum(s -> s.E, segs)
-    numevals = (2n+1) * (N-1)
+    E = sum(s -> s.E, segs)     # sum error estims
+    numevals = (2n+1) * (N-1)    # since 2n+1 Kronrod pts, and N-1 input segs
 
     # logic here is mainly to handle dimensionful quantities: we
-    # don't know the correct type of atol115, in particular, until
+    # don't know the correct type of atol, in particular, until
     # this point where we have the type of E from f.  Also, follow
     # Base.isapprox in that if atol≠0 is supplied by the user, rtol
     # defaults to zero.
     atol_ = something(atol, zero(E))
     rtol_ = something(rtol, iszero(atol_) ? sqrt(eps(one(eltype(x)))) : zero(eltype(x)))
-
-    #= optimize common case of no subdivision
+    # this sets default rtol=sqrt(eps)
+    
+    # optimize common case of no subdivision
     if E ≤ atol_ || E ≤ rtol_ * nrm(I) || numevals ≥ maxevals
-        return (I, E) # fast return when no subdivisions required
+        #return (I, E)   # fast return when no subdivisions required
+        return (I, E, segs)   # add extra segs info (same as user s input)
     end
-    =#
 
-    segheap = segbuf === nothing ? collect(segs) : (resize!(segbuf, N-1) .= segs)
+    # why is collect() needed here?
+    segheap = (segbuf === nothing) ? collect(segs) : (resize!(segbuf, N-1) .= segs)
     heapify!(segheap, Reverse)
-    return adapt(f, segheap, I, E, numevals, x,w,gw,n, atol_, rtol_, maxevals, nrm)
+    # single call to adaptive refinement...
+    return adapt(f, segheap, I, E, numevals, x,w,gw,n, atol_, rtol_, maxevals, nrm, mero)
+end
+
+function find_near_poles(f, s::Segment; rho=1.0, p=8)
+    """
+    tpoles, zpoles = find_near_poles(f, s::Segment; rho=1.0, p=8)
+
+    Attempt to find locations of all poles of scalar meromorphic
+    function `f(z)` that are nearby (in the sense of Bernstein
+    ellipse) to the straight segment `s`. The vector `tpoles` gives
+    locations relative to the standard interval `[-1,1]`, whereas
+    `zpoles` gives locations in the input argument of `f`.  If there
+    are also nearby zero(s) or non-meromorphic singularities the
+    method fails and returns `NaN`, `NaN`.
+
+    The method works with `g = 1/f`, by assuming it is locally
+    analytic---hence the brittleness to nearby zeros.  We use Boyd's
+    conversion from `g` values on Chebyshev nodes on the segment to a
+    Laurent (and then Taylor) series for `g` in an annular
+    neighborhood of the unit circle, followed by rootfinding. For a segment from `a` to `b`,
+    the map from `z` (input arg) to `t` (coord scaled to the unit interval) is
+    `t = (z - (b+a)/2) / ((b-a)/2)`.
+    Then the Joukowsky map `t = (ξ+1/ξ)/2` defines the variable `ξ` in which
+    roots are found in an annular neighborhood of the unit circle.
+
+    `rho > 1.0` sets the Bernstein ellipse parameter in which to keep
+    poles, so that the ellipse for the standard segment `[-1,1]` has
+    semiaxes `cosh(rho)` and `sinh(rho)`, and for the actual segment
+    is shifted and scaled appropriately. `p` sets the number of
+    Chebyshev points (`p+1` of them) in the Boyd conversion to a Lau
+    
+    `f` must be a scalar function for now, unlike in `QuadGK`.
+
+    To do: more elaborate method a la Delves, Lyness, Kravanja.
+
+    Alex Barnett 6/19/23.
+    """
+
+    #
+    # Method: eval f(t) for t=Cheby pts on segment, which is same as f(t(z))
+    # on z=roots of unity, for Joukowsky map t = (z+1/z)/2 except shifted+scaled
+    # Use Boyd z^p shift to a Taylor degree 2p, then find the z-roots.
+    mid = (s.b+s.a)/2
+    sca = (s.b-s.a)/2
+    t = [mid + sca*cos(π*j/p) for j in 0:p]   # p+1 distinct Cheby pts
+    ift = 1.0 ./ f.(t)           # eval 1/f to find its roots
+    ift = [ift;ift[end-1:-1:2]];   # duplicate
+    ifhat = fft(ift)
+    bern_decay = exp(-rho*(p-2))
+    ifhat_decay = maximum(abs.(ifhat[p-1:p+1])) / maximum(abs.(ifhat[1:3]))
+    if ifhat_decay > bern_decay
+        println("find_near_poles: bern_decay $bern_decay, vs ifhat_decay $ifhat_decay")
+        # 1/f(theta) poorly approx by Laurent in rho-annulus, so f must have
+        # >0 nearby zeros. Give up for now.
+        return NaN, NaN
+    end
+    zr = PolynomialRoots.roots(fftshift(ifhat))   # roots in annular variable
+    zr = zr[(abs.(zr).>=1.0) .& (abs.(zr).<exp(rho))]  # outer part of annulus
+    tpoles = (zr .+ 1.0./zr)/2
+    return tpoles, mid.+sca*tpoles         # 2nd is poles wrt input arg of f
 end
 
 # internal routine to perform the h-adaptive refinement of the integration segments (segs)
-function adapt(f::F, segs::Vector{T}, I, E, numevals, x,w,gw,n, atol, rtol, maxevals, nrm) where {F, T}
+function adapt(f::F, segs::Vector{T}, I, E, numevals, x,w,gw,n, atol, rtol, maxevals, nrm, mero) where {F, T}
     # Pop the biggest-error segment and subdivide (h-adaptation)
     # until convergence is achieved or maxevals is exceeded.
+    #
+    # AHB mero version, also w/ extra doc comments.
+    # Here E is the total error, and I the total integrand. Hence they get updated.
+    # There is no recursion, just continuing to pop worst el in heap, until *tot* E hits tol.
+    # Note if rtol=0, it has no effect.  Logic is: stop if either criterion on E passes.
     while E > atol && E > rtol * nrm(I) && numevals < maxevals
-        s = heappop!(segs, Reverse)
+        s = heappop!(segs, Reverse)         # deletes the highest-E seg (s) from segs
         mid = (s.a + s.b) / 2
+        if !isnothing(mero)         # try meromorphic   
+            tpoles, zpoles = find_near_poles(f, s; rho=mero.rho, p=mero.p)
+            numevals += p+1      # include f evals in find_near_poles
+            # decide one of 2 ways to adapt, bending out in C plane down or up...
+            if !isempty(tpoles) && !isnan(tpoles[1])    # there is a near pole & it succeeded
+                if sum(abs.(real(tpoles)).>0.7) == 0    # no poles too close near ends
+                    sca = (s.b - s.a)/2                # scale factor for segment wrt [-1,1]
+                    if sum(imag(tpoles).>0.0)>0 && sum(imag(tpoles).<=0.0)==0
+                        mid = mid - 1.0im*sca   # bend down: wacky but have to start somewhere
+                    elseif sum(imag(tpoles).<0.0)>0 && sum(imag(tpoles).>=0.0)==0
+                        mid = mid + 1.0im*sca    # bend up
+                    end
+                end
+            end
+        end
         s1 = evalrule(f, s.a, mid, x,w,gw, nrm)
         s2 = evalrule(f, mid, s.b, x,w,gw, nrm)
+        # updates I,E by subtracting contrib of current seg s then add the two new ones
         if f isa InplaceIntegrand
             I .= (I .- s.I) .+ s1.I .+ s2.I
         else
@@ -58,8 +144,9 @@ function adapt(f::F, segs::Vector{T}, I, E, numevals, x,w,gw,n, atol, rtol, maxe
         # handle type-unstable functions by converting to a wider type if needed
         Tj = promote_type(typeof(s1), promote_type(typeof(s2), T))
         if Tj !== T
+            println("type-unstable Tj stuff: T=$T, Tj=$Tj")
             return adapt(f, heappush!(heappush!(Vector{Tj}(segs), s1, Reverse), s2, Reverse),
-                         I, E, numevals, x,w,gw,n, atol, rtol, maxevals, nrm)
+                         I, E, numevals, x,w,gw,n, atol, rtol, maxevals, nrm, mero)
         end
 
         heappush!(segs, s1, Reverse)
@@ -82,7 +169,8 @@ function adapt(f::F, segs::Vector{T}, I, E, numevals, x,w,gw,n, atol, rtol, maxe
             E += segs[i].E
         end
     end
-    return (I, E, numevals, segs)
+    #return (I, E)
+    return (I, E, segs)           # the extra segs info (breaks some tests)
 end
 
 realone(x) = false
@@ -116,7 +204,8 @@ function handle_infinities(workfunc, f, s)
             end
         end
     end
-    return workfunc(f, s, identity)
+    return workfunc(f, s, identity)   # calls do_quadgk, if no infs at either endpoint of s list
+    # doesn't check if there's inf's in middle of s list
 end
 
 function handle_infinities(workfunc, f::InplaceIntegrand, s)
@@ -152,7 +241,7 @@ end
 # Gauss-Kronrod quadrature of f from a to b to c...
 
 """
-    quadgk(f, a,b,c...; rtol=sqrt(eps), atol=0, maxevals=10^7, order=7, norm=norm, segbuf=nothing)
+    quadgk(f, a,b,c...; rtol=sqrt(eps), atol=0, maxevals=10^7, order=7, norm=norm, segbuf=nothing, mero=nothing)
 
 Numerically integrate the function `f(x)` from `a` to `b`, and optionally over additional
 intervals `b` to `c` and so on. Keyword options include a relative error tolerance `rtol`
@@ -210,15 +299,34 @@ In normal usage, `quadgk(...)` will allocate a buffer for segments. You can
 instead pass a preallocated buffer allocated using `alloc_segbuf(...)` as the
 `segbuf` argument. This buffer can be used across multiple calls to avoid
 repeated allocation.
+
+AHB:
+Passing in mero a QuadGK.Meroopts struct controls the meromorphic variant.
+
 """
 quadgk(f, segs...; kws...) =
     quadgk(f, promote(segs...)...; kws...)
 
+# This is the main entry point.
+# Confusing that segs is plain list of reals, each as separate arg. not Segments as above
 function quadgk(f, segs::T...;
-       atol=nothing, rtol=nothing, maxevals=10^7, order=7, norm=norm, segbuf=nothing) where {T}
+                atol=nothing, rtol=nothing, maxevals=10^7, order=7, norm=norm, segbuf=nothing, mero=nothing) where {T}
+    # AHB added mero arg
+    #println(segs)
+
+    # This is tricky: despite "do", it does *not* loop over elements of segs!
+    # It's a way to pass inline quadr func to handle_infinities, wrapping in its kws.
+    # It does: handle_infinities((f,s,_) -> do_quadgk(f,s,...), f, segs)
+    # and in the case of no Infs at endpoints of segs list,
+    # this does effectively: do_quadgk(f, segs, order, etc...)
+    # Note workfunc is *not* plain do_quadgk(..) but is an inline wrapper which takes as
+    # args (f,s).
+    # This is very confusing indirection, clever but hard to parse
     handle_infinities(f, segs) do f, s, _
-        do_quadgk(f, s, order, atol, rtol, maxevals, norm, segbuf)
+        do_quadgk(f, s, order, atol, rtol, maxevals, norm, segbuf, mero)
+        # defines inline func of (f,s,_) which calls do_quadgk(f,s,...) with default kws
     end
+    # note "norm" is the func from LinearAlg
 end
 
 """
@@ -279,6 +387,8 @@ to improve the convergence rate.
 """
 function quadgk_count(f, args...; kws...)
     count = 0
+    # clever that wraps f inside an inline func that counts (somehow count is
+    # in scope always...)
     i = quadgk(args...; kws...) do x
         count += 1
         f(x)
